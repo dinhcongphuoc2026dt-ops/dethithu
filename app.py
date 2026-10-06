@@ -1,19 +1,29 @@
 import streamlit as st
-import base64
 import requests
 import json
-import pandas as pd  # Thêm thư viện pandas để đọc file Excel
+import pandas as pd
+import fitz  # Thư viện PyMuPDF để đọc PDF
 
 st.set_page_config(page_title="Đề online từ file PDF", layout="wide")
+
+# --- HÀM CACHE CHUYỂN PDF THÀNH ẢNH (GIÚP APP CHẠY MƯỢT, KHÔNG LAG) ---
+@st.cache_data(show_spinner="Đang xử lý đề thi PDF...")
+def convert_pdf_to_images(pdf_bytes, dpi=150):
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    images = []
+    for page_num in range(len(doc)):
+        page = doc.load_page(page_num)
+        pix = page.get_pixmap(dpi=dpi)
+        img_bytes = pix.tobytes("png")
+        images.append(img_bytes)
+    return images
 
 # --- HÀM CHUYỂN FILE EXCEL THÀNH DICTIONARY ĐÁP ÁN ---
 def load_excel_key(file):
     try:
-        # Đọc file Excel
+        # Đọc file Excel (yêu cầu cài openpyxl)
         df = pd.read_excel(file)
         
-        # Chuyển 2 cột "Câu" và "Đáp án" thành dạng Dictionary
-        # Đảm bảo ép kiểu chuỗi để tránh lỗi so sánh số/chữ
         key_dict = {}
         for index, row in df.iterrows():
             cau = str(row['Câu']).strip()
@@ -78,15 +88,37 @@ WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbyh7-mqwrdLzptQLEj-C_ryc_
 
 st.title("📝 Kiểm tra trực tuyến môn Toán")
 
-col_pdf, col_form = st.columns([3, 2])
+# Chia tỷ lệ cột 6-4 để đề thi rộng rãi, dễ nhìn hơn
+col_pdf, col_form = st.columns([6, 4])
 
-# --- CỘT TRÁI: HIỂN THỊ FILE PDF ---
+# --- CỘT TRÁI: HIỂN THỊ FILE PDF (ĐÃ KHẮC PHỤC LỖI CHROME BLOCK) ---
 with col_pdf:
-    st.subheader("📄 Đề thi (File PDF)")
+    st.subheader("📄 Đề thi")
     if uploaded_pdf is not None:
-        base64_pdf = base64.b64encode(uploaded_pdf.read()).decode('utf-8')
-        pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="800" type="application/pdf"></iframe>'
-        st.markdown(pdf_display, unsafe_allow_html=True)
+        try:
+            pdf_bytes = uploaded_pdf.getvalue()
+            images = convert_pdf_to_images(pdf_bytes)
+            
+            # Tùy chọn cách xem đề thi
+            display_mode = st.radio(
+                "Chế độ xem đề thi:", 
+                ["Xem tất cả các trang (Cuộn)", "Xem từng trang (Sang trang)"], 
+                horizontal=True
+            )
+            
+            st.markdown("---")
+            
+            if display_mode == "Xem từng trang (Sang trang)":
+                page_number = st.slider("Chuyển trang đề thi", min_value=1, max_value=len(images), value=1)
+                st.image(images[page_number - 1], use_container_width=True)
+            else:
+                # Cuộn xem tất cả
+                for img in images:
+                    st.image(img, use_container_width=True)
+                    st.divider()
+                    
+        except Exception as e:
+            st.error(f"Lỗi xử lý file PDF: {e}")
     else:
         st.info("👆 Vui lòng tải file PDF ở thanh bên trái (Sidebar) để hiển thị đề thi!")
 
@@ -128,7 +160,7 @@ with col_form:
         if not ho_ten or not lop:
             st.error("Vui lòng nhập đầy đủ Họ tên và Lớp trước khi nộp bài!")
         elif not answer_key_data:
-            st.error("Chưa có dữ liệu đáp án! Vui lòng tải file Excel đáp án lên ở thanh bên (Sidebar).")
+            st.error("Chưa có dữ liệu đáp án! Vui lòng nhờ giáo viên tải file Excel đáp án lên.")
         else:
             # Chấm điểm từ file Excel
             diem_so = tinh_tong_diem(user_answers, answer_key_data)
